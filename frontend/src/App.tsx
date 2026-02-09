@@ -10,6 +10,10 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 };
 const AppRoutes: React.FC = () => {
   const { isAuthenticated, isLoading } = useAuth();
+  console.log("CLIENT_ID", import.meta.env.VITE_ENTRA_CLIENT_ID);
+  console.log("TENANT_ID", import.meta.env.VITE_ENTRA_TENANT_ID);
+  console.log("AUTHORITY", `https://login.microsoftonline.com/${import.meta.env.VITE_ENTRA_TENANT_ID}`);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-indigo-900 to-slate-900 text-white relative overflow-hidden">

@@ -2,7 +2,6 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { InteractionStatus, PublicClientApplication } from "@azure/msal-browser";
 import { MsalProvider, useMsal } from "@azure/msal-react";
 import { loginRequest, msalConfig } from "../auth/msalConfig";
-import { getPrimaryRole } from "../auth/claims";
 import axios from "axios";
 
 // Initialize MSAL outside to pass to provider
@@ -39,6 +38,17 @@ const AuthProviderContent = ({ children }: { children: React.ReactNode }) => {
     // 1. First, we check if an OIDC user is already logged in via MSAL (accounts.length > 0).
     // 2. If not, we check for a Local Auth JWT token in localStorage.
     // This ensures that the user session persists across reloads for both methods.
+    const buildOidcUserFromAccount = (account: (typeof accounts)[number]) => {
+        setUser({
+            id: account.localAccountId,
+            name: account.name || "",
+            username: account.username,
+            role: account.idTokenClaims ? String(account.idTokenClaims["roles"] ?? account.idTokenClaims["role"] ?? "User") : "User",
+            authMethod: "oidc",
+            rawClaims: account.idTokenClaims,
+        });
+    };
+
     useEffect(() => {
         if (inProgress !== InteractionStatus.None) return;
         const checkLocalAuth = async () => {
@@ -64,34 +74,24 @@ const AuthProviderContent = ({ children }: { children: React.ReactNode }) => {
             setIsLoading(false);
         };
 
-        // [LOGIC] Priority: OIDC > Local
-        // If MSAL has an account, we use that. Otherwise, we fallback to checking local storage.
-
+        const checkOidcAuth = async () => {
+            try {
+                const account = accounts[0];
+                instance.setActiveAccount(account);
+                buildOidcUserFromAccount(account);
+            } catch (e) {
+                console.error("OIDC session found but setup failed", e);
+            } finally {
+                setIsLoading(false);
+            }
+        };
         if (accounts.length > 0) {
-            // OIDC User Found
-            const account = accounts[0];
-            instance.setActiveAccount(account);
-            setUser({
-                id: account.localAccountId,
-                name: account.name || "",
-                username: account.username,
-                role: getPrimaryRole(account),
-                authMethod: "oidc",
-                rawClaims: account.idTokenClaims,
-            });
-            setIsLoading(false);
+            setIsLoading(true);
+            checkOidcAuth();
         } else {
             checkLocalAuth();
         }
-    }, [accounts, instance, inProgress]);
-
-    const loginOidc = async () => {
-        try {
-            await instance.loginRedirect(loginRequest);
-        } catch (e) {
-            console.error(e);
-        }
-    };
+    }, [instance, accounts, inProgress]);
 
     const loginLocal = async (username: string, password: string) => {
         setIsLoading(true);
@@ -122,6 +122,14 @@ const AuthProviderContent = ({ children }: { children: React.ReactNode }) => {
             throw error;
         }
         setIsLoading(false);
+    };
+
+    const loginOidc = async () => {
+        try {
+            await instance.loginRedirect(loginRequest);
+        } catch (error) {
+            console.error(error);
+        }
     };
 
     const logout = () => {

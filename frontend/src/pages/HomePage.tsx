@@ -1,10 +1,61 @@
-import React from "react";
+import React, { useState } from "react";
+import { useMsal } from "@azure/msal-react";
 import { useAuth } from "../context/AuthContext";
 import { RoleGate } from "../components/RoleGate";
 import { TokenInspector } from "../components/TokenInspector";
+import { apiTokenRequest } from "../auth/msalConfig";
 
 export const HomePage: React.FC = () => {
     const { user, logout } = useAuth();
+    const { instance, accounts } = useMsal();
+    const [backendResult, setBackendResult] = useState<string | null>(null);
+    const [backendError, setBackendError] = useState<string | null>(null);
+    const [backendLoading, setBackendLoading] = useState(false);
+    const fetchBackendUser = async () => {
+        setBackendLoading(true);
+        setBackendError(null);
+        setBackendResult(null);
+
+        try {
+            let token: string | undefined;
+
+            if (user?.authMethod === "oidc") {
+                const account = instance.getActiveAccount() || accounts[0];
+                if (!account) throw new Error("No active OIDC account");
+
+                if (!apiTokenRequest.scopes.length) {
+                    throw new Error("Missing VITE_ENTRA_API_SCOPE (API not configured)");
+                }
+
+                const result = await instance.acquireTokenSilent({
+                    ...apiTokenRequest,
+                    account,
+                });
+
+                token = result.accessToken;
+            } else if (user?.authMethod === "local" && user.token) {
+                token = user.token;
+            }
+
+            if (!token) throw new Error("No token available");
+
+            const response = await fetch("http://localhost:8000/users", {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data?.detail || "Backend request failed");
+            }
+
+            setBackendResult(JSON.stringify(data, null, 2));
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            setBackendError(message);
+        } finally {
+            setBackendLoading(false);
+        }
+    };
 
     return (
         <div className="min-h-screen bg-slate-900 text-white p-8">
@@ -55,6 +106,26 @@ export const HomePage: React.FC = () => {
                             <span className="text-slate-500">Method</span>
                             <span className="text-slate-200 capitalize">{user?.authMethod}</span>
                         </div>
+                    </div>
+
+                    <div className="mt-6">
+                        <button
+                            onClick={fetchBackendUser}
+                            disabled={backendLoading}
+                            className="w-full bg-indigo-500/20 text-indigo-200 px-4 py-2 rounded-lg hover:bg-indigo-500/30 disabled:opacity-60"
+                        >
+                            {backendLoading ? "Testing backend..." : "Test backend /users"}
+                        </button>
+                        {backendError && (
+                            <div className="mt-3 text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded p-2">
+                                {backendError}
+                            </div>
+                        )}
+                        {backendResult && (
+                            <pre className="mt-3 text-xs text-green-300 bg-slate-900 p-2 rounded overflow-auto max-h-64">
+                                {backendResult}
+                            </pre>
+                        )}
                     </div>
                 </div>
             </div>
