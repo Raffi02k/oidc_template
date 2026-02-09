@@ -94,7 +94,7 @@ curl -X POST http://localhost:8000/setup
 ```
 
 Login with:
-- username: `admin`
+- username: `raffi`
 - password: `password123`
 
 ### OIDC Login (Frontend)
