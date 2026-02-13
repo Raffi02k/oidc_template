@@ -1,8 +1,25 @@
-## Backend Notes (OIDC + Local Auth)
+## Backend - Rame Plannering API
+FastAPI-baserad backend med hybrid autentisering (Lokal JWT + OIDC).
 
-This backend supports two auth modes:
-- Local username/password (JWT)
-- Optional OIDC access-token validation for protected endpoints
+### Architecture
+```text
+backend/
+├── app/
+│   ├── auth/               # Autentiseringsmodul
+│   │   ├── __init__.py    # Hybrid auth orchestration 
+│   │   ├── local_jwt.py   # JWT token-hantering
+│   │   └── oidc.py        # OIDC/Microsoft Entra ID
+│   ├── routers/           # API endpoints
+│   │   ├── api.py         # Huvuddata (units, staff, schedule)
+│   │   ├── local_auth.py  # /token endpoint
+│   │   └── oidc_auth.py   # /oidc/me endpoint
+│   ├── models.py          # SQLAlchemy datamodeller
+│   ├── schemas.py         # Pydantic scheman
+│   ├── db.py              # Databaskonfiguration
+│   ├── seed.py            # Databasinitiering  
+│   └── main.py            # FastAPI app
+└── requirements.txt
+```
 
 ### Claims We Use (Entra ID)
 - `oid`: Stable user id in the tenant. Preferred primary key (`oidc_id`).

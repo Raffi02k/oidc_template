@@ -1,67 +1,46 @@
-from datetime import datetime, timedelta
-from typing import Optional, cast
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from sqlalchemy.orm import Session
-from app import models
+import logging
 import os
 import time
+import uuid
+from typing import Optional, cast
 import requests
-import logging
 from dotenv import load_dotenv
-from app.database import get_db
-from pydantic import BaseModel
+from fastapi import HTTPException, status
+from jose import JWTError, jwt
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from .. import models
+from .local_jwt import get_password_hash
+from ..models import User, AuthMethod
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 load_dotenv()
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM")
-_raw_expire_minutes = os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES")
-
 OIDC_ISSUER = os.getenv("OIDC_ISSUER")  # Comma-separated issuers allowed
 OIDC_AUDIENCE = os.getenv("OIDC_AUDIENCE")  # API App ID URI or client id
 OIDC_JWKS_URL = os.getenv("OIDC_JWKS_URL")  # Entra JWKS endpoint
 OIDC_REQUIRED_SCOPES = os.getenv("OIDC_REQUIRED_SCOPES")
 OIDC_JWKS_CACHE_TTL_SECONDS = os.getenv("OIDC_JWKS_CACHE_TTL_SECONDS", "3600")
 
-if not SECRET_KEY or not ALGORITHM or not _raw_expire_minutes:
-    raise RuntimeError("Missing required environment variables: SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES")
-
-assert SECRET_KEY is not None
-assert ALGORITHM is not None
-assert _raw_expire_minutes is not None
-
-SECRET_KEY = cast(str, SECRET_KEY)
-ALGORITHM = cast(str, ALGORITHM)
-_raw_expire_minutes = cast(str, _raw_expire_minutes)
-
-try:
-    ACCESS_TOKEN_EXPIRE_MINUTES = int(_raw_expire_minutes)
-except ValueError as exc:
-    raise RuntimeError("ACCESS_TOKEN_EXPIRE_MINUTES must be an integer") from exc
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-logger = logging.getLogger(__name__)
-
 _jwks_cache: dict[str, object] = {}
 
-
+# Helper functions for OIDC authentication 
 def _parse_csv_env(value: str | None) -> list[str]:
+    """Parse a comma-separated string from an environment variable into a list of strings."""
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
 
-
+# Get JWKS from OIDC provider
 def _get_jwks() -> dict:
+    """Get the JSON Web Key Set (JWKS) from the OIDC provider."""
     now = time.time()
     cached = _jwks_cache.get("jwks")
     expires_at = _jwks_cache.get("expires_at")
     if cached and isinstance(expires_at, (int, float)) and now < expires_at:
         return cast(dict, cached)
-
+    # Fetch JWKS from OIDC provider and cache it for the configured TTL
     try:
         response = requests.get(cast(str, OIDC_JWKS_URL), timeout=5)
         response.raise_for_status()
@@ -70,75 +49,12 @@ def _get_jwks() -> dict:
         _jwks_cache["jwks"] = jwks
         _jwks_cache["expires_at"] = now + max(ttl_seconds, 60)
         return jwks
+    # If JWKS fetch fails, use cached JWKS if available
     except Exception as exc:
         if cached:
             logger.warning("JWKS fetch failed; using cached JWKS", exc_info=exc)
             return cast(dict, cached)
         raise
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-class TokenData(BaseModel):
-    username: Optional[str] = None
-
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        # Defaults to 30 minutes if not specified
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    
-    # [IMPORTANT] The "sub" (subject) claim holds the unique identifier (username)
-    # This is standard JWT practice.
-    encoded_jwt = jwt.encode(
-        to_encode,
-        cast(str, SECRET_KEY),
-        algorithm=cast(str, ALGORITHM),
-    )
-    return encoded_jwt
-
-# [CRITICAL] Dependency Injection
-# This function is used by FastAPI "Depends()" to protect routes.
-# It automatically:
-# 1. Extracts the Bearer token from the Authorization header
-# 2. Decodes and validates the signature
-# 3. Fetches the user from the database
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token,
-            cast(str, SECRET_KEY),
-            algorithms=[cast(str, ALGORITHM)],
-        )
-        username: str | None = payload.get("sub")
-        if not isinstance(username, str) or not username:
-            raise credentials_exception
-        token_data = TokenData(username=username)
-    except JWTError:
-        raise credentials_exception
-    
-    user = db.query(models.User).filter(models.User.username == token_data.username).first()
-    if user is None:
-        raise credentials_exception
-    if getattr(user, "is_disabled", False):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is disabled")
-    return user
-
 
 def validate_oidc_token(token: str) -> dict:
     # 0) Måste ha config
@@ -180,8 +96,7 @@ def validate_oidc_token(token: str) -> dict:
 
     return claims
 
-
-
+# Minimal validation of OIDC token
 def validate_oidc_token_minimal(token: str) -> dict:
     if token.count(".") != 2:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not a JWT")
@@ -204,6 +119,7 @@ def first_non_empty_string(claims: dict, possible_keys: list[str]) -> str | None
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
 
 def get_or_create_oidc_user(db: Session, token_claims: dict) -> "models.User":
     # 1) Stabilt OIDC-id: oid (Entra Object ID), annars sub
@@ -262,7 +178,7 @@ def get_or_create_oidc_user(db: Session, token_claims: dict) -> "models.User":
     created_user = models.User(
         username=username,
         email=email_address,
-        full_name=display_name,
+        full_name=display_name, 
         role="User",
         auth_method="oidc",
         oidc_id=oidc_object_id,
@@ -273,7 +189,6 @@ def get_or_create_oidc_user(db: Session, token_claims: dict) -> "models.User":
     db.commit()
     db.refresh(created_user)
     return created_user
-
 
 def require_oidc_scopes(claims: dict, required_scopes: list[str] | None) -> None:
     scopes = claims.get("scp") or ""

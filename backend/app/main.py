@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app import models, routes, seed
-from app.database import engine
+from app import models, seed, routers
+from app.db import engine
 import os
 
 models.Base.metadata.create_all(bind=engine)
@@ -25,7 +25,9 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-app.include_router(routes.router)
+app.include_router(routers.local_auth.router)
+app.include_router(routers.oidc_auth.router)
+app.include_router(routers.api_router.router)
 
 @app.on_event("startup")
 def seed_on_startup():

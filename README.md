@@ -113,11 +113,20 @@ Then call protected endpoints with `Authorization: Bearer <access_token>`.
 /
 ├── backend/
 │   ├── app/
-│   │   ├── auth.py          # JWT + OIDC helpers
-│   │   ├── models.py        # SQLAlchemy User model
-│   │   ├── routes.py        # API endpoints (/token, /me, /users)
-│   │   └── main.py          # FastAPI app + CORS
-│   └── sql_app.db           # SQLite database (local)
+│   │   ├── auth/            # Hybrid Auth orchestration
+│   │   │   ├── __init__.py  # Hybrid auth logic
+│   │   │   ├── local_jwt.py # Local JWT management
+│   │   │   └── oidc.py      # OIDC/Entra ID validation
+│   │   ├── routers/         # API Endpoints
+│   │   │   ├── local_auth.py # /token, /me
+│   │   │   ├── oidc_auth.py  # /me/oidc
+│   │   │   └── api.py        # /users, /status
+│   │   ├── db.py            # Database configuration
+│   │   ├── models.py        # SQLAlchemy models
+│   │   ├── schemas.py       # Pydantic schemas
+│   │   ├── seed.py          # Database seeding
+│   │   └── main.py          # FastAPI app entry
+│   └── sql_app.db           # SQLite database
 ├── frontend/
 │   ├── src/
 │   │   ├── auth/            # MSAL config + claims helpers
